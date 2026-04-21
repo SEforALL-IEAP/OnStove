@@ -2809,7 +2809,7 @@ class OnStove(DataProcessor):
         """Does a linear optimization with stoves given by the user`
 
         Determines where people should be adopting each stove to achieve shares given by `future_share_urban` or
-        `future_share_rural`. This is done using highs-ipm optimization where the objective function is to maximize
+        `future_share_rural`. This is done using highs optimization where the objective function is to maximize
         net-benefits. This function also calls the :meth:`_check_tech` method to ensure that each stove has a future
         share that is possible. The function adds columns for each stove with values between 0 and 1 in each row, 0
         being 0% of the population having a stove and 1 being that 100% have the stove in the settlement. The function
@@ -2972,8 +2972,13 @@ class OnStove(DataProcessor):
         tol_current = tol
 
         while True:
+            solver_options = {
+                "threads": 0
+            }
+
             result = linprog(c=c_vals, A_eq=A_eq_row, b_eq=b_eq_row,
-                             A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs-ipm')
+                             A_ub=A_ub, b_ub=b_ub, bounds=bounds,
+                             method='highs', options=solver_options)
 
             print("Status:", result.message)
             is_basic = ("basic" in result.message.lower())
@@ -3153,27 +3158,53 @@ class OnStove(DataProcessor):
         user_total = sum(max_dict[t] for t in restricted)
         difference = user_total - max_total
 
-        # If we have more population assigned than we can and more than 1 restricted stove, we need to reduce some
-        # shares
+        # If we have more population assigned than we can and more than 1 restricted stove...
         if difference > 0 and len(restricted) > 1 and sum(tech_dict[t] for t in restricted) > max_total:
-            overlap_pop = gdf.loc[overlap_mask, "Calibrated_pop"].sum()
-            target_pop_to_remove = min(overlap_pop / total_pop, difference)
+            #Get net-benefits for all rows for restricted stoves
+            nbs = gdf[nb_cols].values.copy()
 
-            net = overlap_rows[nb_cols + ["Calibrated_pop"]].copy()
-            net["best_col"] = net[nb_cols].idxmax(axis=1)
-            pop_sums = net.groupby("best_col")["Calibrated_pop"].sum()
-            total_pop_sum = pop_sums.sum()
-            shares_to_remove = 1 - pop_sums / total_pop_sum
-            shares_to_remove.index = shares_to_remove.index.str.replace("^net_benefit_", "", regex=True)
+            # Replace NaNs with -inf so they are ranked last and ignored during argsort
+            nbs[np.isnan(nbs)] = -np.inf
 
+            # Extract share limits for each restricted stove
+            limits_list = []
             for t in restricted:
-                if t in shares_to_remove.keys():
-                    max_dict[t] = max_dict[t] - shares_to_remove[t] * target_pop_to_remove
-                else:
-                    if target_pop_to_remove > max_dict[t]:
-                        max_dict[t] = 0
-                    else:
-                        max_dict[t] = max_dict[t] - target_pop_to_remove
+                limits_list.append(gdf[pop_cols[t]].fillna(0).values)
+            limits = np.column_stack(limits_list)
+
+            # Track remaining pop per row
+            rem_pop = gdf["Calibrated_pop"].fillna(0).values.copy()
+
+            # Array to store the allocated populations for the restricted stoves
+            alloc = np.zeros_like(nbs)
+
+            # Rank stoves from highest to lowest net benefit for each row (descending)
+            sorted_idx = np.argsort(-nbs, axis=1)
+
+            # Cascading allocation loop (1st choice, then 2nd, then 3rd...)
+            for choice in range(len(restricted)):
+                # Get the column index of the stove ranked at 'choice' for each row
+                current_stove_idx = sorted_idx[:, choice]
+
+                # Check if this choice actually has a valid net benefit (not -inf)
+                valid_mask = nbs[np.arange(len(gdf)), current_stove_idx] != -np.inf
+
+                # The population limit for the chosen stove in that row
+                limit = limits[np.arange(len(gdf)), current_stove_idx]
+
+                # Allocate the minimum of what's remaining vs the stove's capacity limit
+                to_allocate = np.minimum(rem_pop, limit)
+
+                # Only allocate if the stove is mathematically valid for that row
+                to_allocate[~valid_mask] = 0
+
+                # Add to the stove's total allocation and subtract from remaining population
+                alloc[np.arange(len(gdf)), current_stove_idx] += to_allocate
+                rem_pop -= to_allocate
+
+            # Update max_dict with the final cascaded shares
+            for idx, t in enumerate(restricted):
+                max_dict[t] = alloc[:, idx].sum() / total_pop
 
         # Print max capacities, do not include dummy
         print("\nThe max possible shares for each included stove is:")
@@ -3773,7 +3804,7 @@ class OnStove(DataProcessor):
         if total:
             total_row = summary[summary.columns[1:]].sum().rename('total')
             total_row[variable] = 'total'
-            summary = pd.concat([summary, total_row.to_frame().T], ignore_index=True)
+            summary = pd.concat([summary, total_row.to_frame().T], ignore_index=False)
 
         summary['time_saved'] /= (summary['Households'] * 1000000 * 365)
         if pretty:
