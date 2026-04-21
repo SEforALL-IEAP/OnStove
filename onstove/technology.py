@@ -973,7 +973,7 @@ class LPG(Technology):
         bc_fraction = 0.55  # BC fraction of pm2.5
         oc_fraction = 0.70  # OC fraction of BC
         pm_diesel = 1.52  # g/kg_diesel
-        diesel_ef = {'co2': 3.169, 'co': 7.40, 'n2o': 0.056,
+        diesel_ef = {'co2': 3169, 'co': 7.40, 'n2o': 0.056,
                      'bc': bc_fraction * pm_diesel, 'oc': oc_fraction * bc_fraction * pm_diesel}  # g/kg_Diesel
         kg_yr = self.energy / self.energy_content  # LPG use (kg/yr). Energy required (MJ/yr)/LPG energy content (MJ/kg)
         diesel_consumption = self.travel_time * (14 / 1000) * diesel_density  # kg of diesel per trip
@@ -1453,31 +1453,6 @@ class Charcoal(Technology):
                          inv_cost, fuel_cost, time_of_cooking,
                          om_cost, efficiency, pm25, is_clean=False)
 
-    def get_carbon_intensity(self, model: 'onstove.OnStove'):
-        """This method expands :meth:`Technology.get_carbon_intensity`.
-
-        It excludes the CO2 emissions from the share of firewood that is sustainably harvested (i.e. it does not affect
-        other emissions such as CH4) by using the fraction of Non-Renewable Biomass (fNRB).
-
-        Parameters
-        ----------
-        model: OnStove model
-            Instance of the OnStove model containing the main data of the study case. See
-            :class:`onstove.OnStove`.
-
-        Notes
-        -----
-        For more information about fNRB see [1]_.
-
-        References
-        ----------
-        .. [1] R. Bailis, R. Drigo, A. Ghilardi, O. Masera, The carbon footprint of traditional woodfuels,
-           Nature Clim Change. 5 (2015) 266–272. https://doi.org/10.1038/nclimate2491.
-        """
-        intensity = self['co2_intensity']
-        self['co2_intensity'] *= model.specs['fnrb']
-        super().get_carbon_intensity(model)
-        self['co2_intensity'] = intensity
 
     def production_emissions(self, model: 'onstove.OnStove'):
         """Calculates the emissions caused by the production of Charcoal. The function uses emission factors in regards
@@ -1503,7 +1478,7 @@ class Charcoal(Technology):
         The total charcoal production emissions that can be associated with each household measured in
         kg of CO2-eq per year.
         """
-        emission_factors = {'co2': 1626, 'co': 255, 'ch4': 39.6, 'bc': 0.02, 'oc': 0.74}  # g/kg_Charcoal
+        emission_factors = {'co2': 1626*model.specs['fnrb'], 'co': 255, 'ch4': 39.6, 'bc': 0.02, 'oc': 0.74}  # g/kg_Charcoal
         # Charcoal produced (kg/yr). Energy required (MJ/yr)/Charcoal energy content (MJ/kg)
         kg_yr = self.energy / self.energy_content
         hh_emissions = sum([ef * model.gwp[pollutant] * kg_yr for pollutant, ef in
