@@ -15,6 +15,7 @@ import numpy as np
 import geopandas as gpd
 import rasterio
 import matplotlib.pyplot as plt
+import matplotlib.colors as mc
 import psycopg2
 import scipy.spatial
 from copy import copy
@@ -2082,7 +2083,7 @@ class OnStove(DataProcessor):
         self.gdf['value_of_time'] = norm_layer * self.specs[
             'minimum_wage'] / 30 / 8  # convert $/months to $/h (8 working hours per day)
 
-    def run(self, technologies: Union[list[str], str] = 'all', restriction: bool = True, optimization: bool = True):
+    def run(self, technologies: Union[list[str], str] = 'all', restriction: bool = True, optimization: bool = False):
         """Runs the model using the defined ``technologies`` as options to cook with.
 
         It loops through the ``technologies`` and calculates all costs, benefit and the net-benefit of cooking with
@@ -2679,23 +2680,19 @@ class OnStove(DataProcessor):
             dff = self.gdf.copy()
 
         if isinstance(self.gdf[variable].iloc[0], str):
-            if isinstance(labels, dict):
-                dff = self._re_name(dff, labels, variable)
-            dff[variable] += ' {} '.format(self.tech_separator)
-            dff = dff.groupby('index').agg({variable: 'sum', 'geometry': 'first'})
-            dff[variable] = [s[0:len(s) - (len(self.tech_separator) + 2)] for s in dff[variable]]
+            dff = dff.groupby('index').agg({variable: 'first', 'geometry': 'first'})
+
             if isinstance(labels, dict):
                 dff = self._re_name(dff, labels, variable)
 
             dff.loc[dff[variable].isin(['None and None']), variable] = 'None'
 
             if isinstance(cmap, dict):
-                # _codes = {tech: i for i, tech in enumerate(dff[variable].unique())}
                 _codes = {tech: i + 1 for i, tech in enumerate(cmap.keys())}
-                codes = {tech: _codes[tech] for tech in dff[variable].unique()}
+                codes = {tech: _codes.get(tech, i + 1) for i, tech in enumerate(dff[variable].unique())}
                 codes = dict(sorted(codes.items(), key=lambda item: item[1]))
-                # cmap = {_codes[tech]: cmap[tech] for tech in cmap.keys()}
-                cmap = {codes[tech]: cmap[tech] for tech in dff[variable].unique()}
+
+                cmap = {codes[tech]: cmap.get(tech, '#999999') for tech in dff[variable].unique() if tech in codes}
                 cmap = dict(sorted(cmap.items()))
             else:
                 codes = {tech: i for i, tech in enumerate(dff[variable].unique())}
@@ -3254,6 +3251,83 @@ class OnStove(DataProcessor):
 
         return gdf, updated_techs, updated_shares
 
+    def get_labels_and_cmap(self, variable: str = 'max_benefit_tech',
+                            base_colors: Optional[dict] = None,
+                            clean_names: Optional[dict] = None,
+                            tech_cols: Optional[list] = None):
+        """
+        Generates labels and a blended colormap based on the data in the GDF.
+
+        Parameters
+        ----------
+        variable: str, default 'max_benefit_tech'
+            The column in the GDF to analyze.
+        base_colors: dict, optional
+            Dictionary mapping cleaned names to hex colors.
+        clean_names: dict, optional
+            Dictionary mapping raw tech names to pretty names.
+        tech_cols: list, optional
+            List of column names in the GDF representing the technology shares.
+        """
+
+        if base_colors is None:
+            base_colors = {
+                "Biomass": '#E6194B', "Biomass ICS (ND)": '#911EB4', "Biomass ICS (FD)": '#F58231',
+                "Pellets ICS (FD)": '#F032E6', "Charcoal": '#00C2C7', "Charcoal ICS": '#AAB900',
+                "Biogas": '#3CB44B', "LPG": '#4363D8', "Electricity": '#FFB300'
+            }
+
+        if clean_names is None:
+            clean_names = {
+                'Collected_Traditional_Biomass': 'Biomass',
+                'Collected_Improved_Biomass': 'Biomass ICS (ND)',
+                'Traditional_Charcoal': 'Charcoal',
+                'Biomass Forced Draft': 'Biomass ICS (FD)',
+                'Pellets Forced Draft': 'Pellets ICS (FD)'
+            }
+
+        if tech_cols is None:
+            tech_cols = [
+                'Biogas', 'Charcoal ICS', 'Electricity', 'LPG',
+                'Pellets Forced Draft', 'Biomass Forced Draft',
+                'Collected_Improved_Biomass', 'Collected_Traditional_Biomass', "Charcoal"
+            ]
+
+        def blend_colors(c1, c2):
+            return mc.to_hex((np.array(mc.to_rgb(c1)) + np.array(mc.to_rgb(c2))) / 2)
+
+        available_tech_cols = [col for col in tech_cols if col in self.gdf.columns]
+
+        labels = {}
+        cmap = {}
+        unique_cats = self.gdf[variable].dropna().unique()
+
+        for cat in unique_cats:
+            cat_str = str(cat)
+
+            if " and " in cat_str:
+                subset = self.gdf[self.gdf[variable] == cat]
+                top_two = subset[available_tech_cols].sum().nlargest(2).index.tolist()
+                top_two.sort()
+                top_two_clean = [clean_names.get(tech, tech) for tech in top_two]
+                new_label = " and ".join(top_two_clean)
+            else:
+                new_label = clean_names.get(cat_str, cat_str)
+
+            labels[cat] = new_label
+
+            if " and " in new_label:
+                t1, t2 = new_label.split(" and ")
+                c1 = base_colors.get(t1, "#999999")
+                c2 = base_colors.get(t2, "#999999")
+                color = blend_colors(c1, c2)
+            else:
+                color = base_colors.get(new_label, "#999999")
+
+            cmap[cat] = color
+
+        return labels, cmap
+
     def plot(self, variable: str, metric='mean',
              labels: Optional[dict[str, str]] = None,
              cmap: Union[dict[str, str], str] = 'viridis',
@@ -3466,7 +3540,7 @@ class OnStove(DataProcessor):
         RasterLayer.plot
         VectorLayer.plot
         """
-        raster, codes, cmap = self.create_layer(variable, labels=labels, cmap=cmap, 
+        raster, codes, cmap = self.create_layer(variable, labels=labels, cmap=cmap,
                                                 metric=metric, nodata=nodata)
         if isinstance(admin_layer, gpd.GeoDataFrame):
             admin_layer = admin_layer
@@ -3518,7 +3592,7 @@ class OnStove(DataProcessor):
             for name, stat in _kwargs['extra_stats'].items():
                 extra_text.append(TextArea(name, textprops=font_props))
                 extra_values.append(TextArea(stat, textprops=font_props))
-                
+
         summary = self.summary(total=True, pretty=False, variable=variable, remove_none=True)
         deaths = TextArea("Deaths avoided", textprops=font_props)
         health = TextArea("Health costs avoided", textprops=font_props)
@@ -3532,7 +3606,7 @@ class OnStove(DataProcessor):
         health_costs_avoided = summary.loc['total', 'health_costs_avoided'] / 1000
         reduced_emissions = summary.loc['total', 'reduced_emissions']
         time_saved = summary.loc['total', 'time_saved']
-        # total_costs = (summary.loc['total', 'investment_costs'] + summary.loc['total', 'fuel_costs'] + 
+        # total_costs = (summary.loc['total', 'investment_costs'] + summary.loc['total', 'fuel_costs'] +
                        # summary.loc['total', 'om_costs'] - summary.loc['total', 'salvage_value'])
 
         deaths = TextArea(f"{deaths_avoided:,.0f} pp/yr", textprops=font_props)
@@ -3540,7 +3614,7 @@ class OnStove(DataProcessor):
         emissions = TextArea(f"{reduced_emissions:,.2f} Mton", textprops=font_props)
         time = TextArea(f"{time_saved:,.2f} h/hh.day", textprops=font_props)
         # costs = TextArea(f"{total_costs:,.2f} MUS$", textprops=font_props)
-        
+
         values_vbox = VPacker(children=[deaths, health, emissions, time, *extra_values], pad=0, sep=6, align='right')
 
         hvox = HPacker(children=[texts_vbox, values_vbox], pad=_kwargs['pad'], sep=_kwargs['sep'])
