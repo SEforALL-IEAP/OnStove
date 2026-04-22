@@ -6,14 +6,16 @@ dependencies:
   - dill
   - geopandas
   - jupyterlab
-  - matplotlib
-  - plotnine>=0.12.2
+  - matplotlib-base
+  - mizani
+  - pandas <3.0.0
+  - plotnine >=0.12.2
   - psutil
   - psycopg2
   - pyproj
-  - python>=3.10
+  - python >=3.10
   - python-decouple
   - rasterio
   - scikit-image
   - svgpathtools
-  - svgpath2mpl
+  - svgpath2mpl 

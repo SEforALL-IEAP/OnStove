@@ -3750,6 +3750,7 @@ class OnStove(DataProcessor):
 
         if labels is not None:
             dff = self._re_name(dff, labels, variable)
+            dff.rename(columns=labels, inplace=True)
 
         # Split combined stoves into separate rows
         dff[variable] = dff[variable].astype(str)
@@ -4173,7 +4174,7 @@ class OnStove(DataProcessor):
                               **_kwargs
                               )
              + scale_fill_manual(cmap)
-             + scale_color_manual(cmap, guide=False)
+             + scale_color_manual(cmap, guide=None)
              + theme_name
              + theme(text=element_text(**_font_args))
              + wrap
@@ -4235,7 +4236,7 @@ class OnStove(DataProcessor):
                               **kwargs
                               )
              + scale_fill_manual(cmap)
-             + scale_color_manual(cmap, guide=False)
+             + scale_color_manual(cmap, guide=None)
              + theme_minimal()
              + theme(text=element_text(**font_args))
              + labs(x=x_title, y=y_title, fill='Cooking technology')
@@ -4378,13 +4379,36 @@ class OnStove(DataProcessor):
             Figure object used to plot the distribution
         """
         if best_mix:
-            df = self.gdf[[fill, 'Calibrated_pop', 'Households', 'maximum_net_benefit',
-                           'health_costs_avoided', 'opportunity_cost_gained', 'emission_costs_avoided',
-                           'investment_costs', 'salvage_value', 'fuel_costs', 'om_costs', 
-                           'relative_wealth', 'value_of_time']].copy()
+            # 1. Start with a copy of the full GDF to access share columns
+            df = self.gdf.copy()
+
+            # Apply labels to the rows and the column headers
             df = self._re_name(df, labels, fill)
+            if labels is not None:
+                df.rename(columns=labels, inplace=True)
+
             cat = fill
-            tech_list = df.groupby(fill)[['Calibrated_pop']].sum()
+
+            # 2. Explode blended technologies into separate rows
+            df[cat] = df[cat].astype(str)
+            df['split_cats'] = df[cat].str.split(' and ')
+            df = df.explode('split_cats').rename(columns={'split_cats': 'category'})
+
+            # 3. Look up shares for each technology per row
+            share_values = df.to_numpy()
+            cat_cols = list(df.columns)
+            category_idx = [cat_cols.index(c) if c in cat_cols else None for c in df['category']]
+            shares = np.array([row[idx] if idx is not None else 0 for row, idx in zip(share_values, category_idx)])
+
+            # 4. Proportional scaling of households and population
+            df['Households'] = df['Households'] * shares
+            df['Calibrated_pop'] = df['Calibrated_pop'] * shares
+
+            # Overwrite the category column with exploded base techs
+            df[cat] = df['category']
+
+            # Sort tech_list for consistent ordering
+            tech_list = df.groupby(cat)[['Calibrated_pop']].sum()
             tech_list = tech_list.reset_index().sort_values('Calibrated_pop')[fill].tolist()
             if variable == 'net_benefits':
                 df.rename({'maximum_net_benefit': 'net_benefits'}, inplace=True, axis=1)
@@ -4471,7 +4495,11 @@ class OnStove(DataProcessor):
         if groupby.lower() == 'urbanrural':
             p += labs(x='Settlement')
         else:
-            p += theme(legend_position="none")
+            p += theme(legend_position='right')
+
+        if cmap is not None:
+            base_techs = [tech for tech in cmap.keys() if " and " not in str(tech)]
+            p += scale_fill_manual(values=cmap, breaks=base_techs)
 
         if quantiles:
             p = self._plot_quantiles(p, x_variable=x, y_variable='Households')
