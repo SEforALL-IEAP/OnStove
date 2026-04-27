@@ -2832,7 +2832,7 @@ class OnStove(DataProcessor):
         # Add a dummy technology with a very small share. This ensures that in the _check_techs the share will not
         # increase to any level that will be noticed in the code
         self.gdf['net_benefit_dummy'] = 0.0
-        self.gdf["dummy"] = 0.0
+        self.gdf["dummy"] = -1e-12
         tech.append("dummy")
         share.append(1e-12)
 
