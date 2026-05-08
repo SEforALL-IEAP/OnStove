@@ -2238,80 +2238,83 @@ class OnStove(DataProcessor):
         extract_om_costs
         extract_salvage
         """
-        net_benefit_cols = [col for col in self.gdf if 'net_benefit_' in col]
-        benefits_cols = [col for col in self.gdf if 'benefits_' in col]
+        net_benefit_cols = [col for col in self.gdf.columns if 'net_benefit_' in col]
+        benefits_cols = [col for col in self.gdf.columns if 'benefits_' in col]
 
         for benefit, net in zip(benefits_cols, net_benefit_cols):
             self.gdf[net + '_temp'] = self.gdf[net]
             if restriction in [True, 'yes', 'y', 'Y', 'Yes', 'PositiveBenefits', 'Positive_Benefits']:
                 self.gdf.loc[self.gdf[benefit] < 0, net + '_temp'] = np.nan
 
-        temps = [col for col in self.gdf if '_temp' in col]
-        self.gdf["max_benefit_tech"] = self.gdf[temps].idxmax(axis=1).astype('string')
+        temps = [col for col in self.gdf.columns if '_temp' in col]
 
-        self.gdf['max_benefit_tech'] = self.gdf['max_benefit_tech'].str.replace("net_benefit_", "")
-        self.gdf['max_benefit_tech'] = self.gdf['max_benefit_tech'].str.replace("_temp", "")
-        self.gdf["maximum_net_benefit"] = self.gdf[temps].max(axis=1)
+        best_tech = self.gdf[temps].idxmax(axis=1)
+        best_tech = best_tech.str.replace("net_benefit_", "").str.replace("_temp", "")
+        self.gdf["max_benefit_tech"] = best_tech
 
-        gdf = gpd.GeoDataFrame()
-        gdf_copy = self.gdf.copy()
-        # TODO: Change this to a while loop that checks the sum of number of households supplied against the total hhs
+        tech_names = [tech.name for tech in techs]
+        for t_name in tech_names:
+            if t_name not in self.gdf.columns:
+                self.gdf[t_name] = 0.0
+
+        remaining_share = pd.Series(1.0, index=self.gdf.index)
+
         for tech in techs:
-            current = (tech.households < gdf_copy['Households']) & \
-                      (gdf_copy["max_benefit_tech"] == tech.name)
-            dff = gdf_copy.loc[current].copy()
-            if current.sum() > 0:
-                # dff.loc[current, "maximum_net_benefit"] *= tech.factor.loc[current]
-                dff.loc[current, f'net_benefit_{tech.name}_temp'] = np.nan
+            is_primary = (self.gdf["max_benefit_tech"] == tech.name)
+            if not is_primary.any():
+                continue
 
-                second_benefit_cols = temps.copy()
-                second_benefit_cols.remove(f'net_benefit_{tech.name}_temp')
-                second_best = dff.loc[current, second_benefit_cols].idxmax(axis=1)
+            allowed_share = pd.Series(1.0, index=self.gdf[is_primary].index)
 
-                second_best.replace(np.nan, 'NaN', inplace=True)
-                second_best = second_best.str.replace("net_benefit_", "")
-                second_best = second_best.str.replace("_temp", "")
-                second_best.replace('NaN', np.nan, inplace=True)
+            # FIX: Add .loc[is_primary] to tech.households so the indices match perfectly
+            hh_constraint = tech.households.loc[is_primary] < self.gdf.loc[is_primary, 'Households']
 
-                second_tech_net_benefit = dff.loc[current, second_benefit_cols].max(axis=1) #* (1 - tech.factor.loc[current])
+            # Apply the capacity factor where the constraint triggers
+            if isinstance(tech.factor, pd.Series):
+                allowed_share.loc[hh_constraint] = tech.factor.loc[is_primary][hh_constraint]
+            else:
+                allowed_share.loc[hh_constraint] = tech.factor
 
-                elec_factor = dff['Elec_pop_calib'] / dff['Calibrated_pop']
-                dff['max_benefit_tech'] = second_best
-                dff['maximum_net_benefit'] = second_tech_net_benefit
-                dff['Calibrated_pop'] *= (1 - tech.factor.loc[current])
-                dff['Households'] *= (1 - tech.factor.loc[current])
+            #Assign the calculated share and deduct it from the remaining pool
+            self.gdf.loc[is_primary, tech.name] = allowed_share
+            remaining_share.loc[is_primary] -= allowed_share
 
-                self.gdf.loc[current, 'Calibrated_pop'] *= tech.factor.loc[current]
-                self.gdf.loc[current, 'Households'] *= tech.factor.loc[current]
-                if tech.name == 'Electricity':
-                    dff['Elec_pop_calib'] *= 0
-                #     self.gdf.loc[current, 'Elec_pop_calib'] *= tech.factor.loc[current]
-                else:
-                    self.gdf.loc[current, 'Elec_pop_calib'] = self.gdf.loc[current, 'Calibrated_pop'] * elec_factor
-                    dff['Elec_pop_calib'] = dff['Calibrated_pop'] * elec_factor
-                gdf = pd.concat([gdf, dff])
+        has_leftovers = remaining_share > 0
+        if has_leftovers.any():
+            # Mask the primary choice's benefits to force the idxmax to find the second best
+            for tech in techs:
+                mask = has_leftovers & (self.gdf["max_benefit_tech"] == tech.name)
+                if mask.any():
+                    self.gdf.loc[mask, f'net_benefit_{tech.name}_temp'] = np.nan
 
-        self.gdf = pd.concat([self.gdf, gdf])
+            second_best = self.gdf.loc[has_leftovers, temps].idxmax(axis=1)
+            second_best = second_best.str.replace("net_benefit_", "").str.replace("_temp", "").fillna("None")
 
-        for net in net_benefit_cols:
-            self.gdf[net + '_temp'] = self.gdf[net]
+            #Assign whatever share is left to the second best technology
+            for t_name in tech_names:
+                mask = has_leftovers & (second_best == t_name)
+                if mask.any():
+                    self.gdf.loc[mask, t_name] = remaining_share.loc[mask]
 
-        temps = [col for col in self.gdf if 'temp' in col]
+        share_matrix = self.gdf[tech_names].fillna(0).to_numpy()
 
-        for tech in self.gdf["max_benefit_tech"].unique():
-            index = self.gdf.loc[self.gdf['max_benefit_tech'] == tech].index
-            self.gdf.loc[index, f'net_benefit_{tech}_temp'] = np.nan
+        benefit_matrix = np.column_stack([
+            self.gdf.get(f'net_benefit_{t_name}', pd.Series(0, index=self.gdf.index)).fillna(0)
+            for t_name in tech_names
+        ])
+        self.gdf['maximum_net_benefit'] = (share_matrix * benefit_matrix).sum(axis=1)
 
-        isna = self.gdf["max_benefit_tech"].isna()
+        #Update 'max_benefit_tech' label to display all adopted tech names combined (e.g. "Biogas and Wood")
+        relevant_df = self.gdf[tech_names].gt(0)
+        bool_matrix = relevant_df.to_numpy(dtype=bool)
+        tech_names_arr = np.array(relevant_df.columns)
 
-        if isna.sum() > 0:
-            self.gdf.loc[isna, 'max_benefit_tech'] = self.gdf.loc[isna, temps].idxmax(axis=1).astype(str)
-        self.gdf['max_benefit_tech'] = self.gdf['max_benefit_tech'].str.replace("net_benefit_", "")
-        self.gdf['max_benefit_tech'] = self.gdf['max_benefit_tech'].str.replace("_temp", "")
-        self.gdf.loc[isna, "maximum_net_benefit"] = self.gdf.loc[isna, temps].max(axis=1)
-
-        dummies = pd.get_dummies(self.gdf['max_benefit_tech'], dtype=int)
-        self.gdf = pd.concat([self.gdf, dummies], axis=1)
+        # In case there are no valid positive benefits, label as 'None'
+        self.gdf['max_benefit_tech'] = [
+            ' and '.join(tech_names_arr[mask]) if mask.any() else 'None'
+            for mask in bool_matrix
+        ]
+        self.gdf.drop(columns=temps, inplace=True)
 
 
     # TODO: check if we need this method
@@ -3303,13 +3306,16 @@ class OnStove(DataProcessor):
         unique_cats = self.gdf[variable].dropna().unique()
 
         for cat in unique_cats:
-            cat_str = str(cat)
+            # Clean the raw category string immediately
+            cat_str = str(cat).strip()
 
             if " and " in cat_str:
                 subset = self.gdf[self.gdf[variable] == cat]
                 top_two = subset[available_tech_cols].sum().nlargest(2).index.tolist()
                 top_two.sort()
-                top_two_clean = [clean_names.get(tech, tech) for tech in top_two]
+
+                # Strip and clean the sub-technologies
+                top_two_clean = [clean_names.get(tech.strip(), tech.strip()) for tech in top_two]
                 new_label = " and ".join(top_two_clean)
             else:
                 new_label = clean_names.get(cat_str, cat_str)
@@ -3317,14 +3323,22 @@ class OnStove(DataProcessor):
             labels[cat] = new_label
 
             if " and " in new_label:
-                t1, t2 = new_label.split(" and ")
-                c1 = base_colors.get(t1, "#999999")
-                c2 = base_colors.get(t2, "#999999")
-                color = blend_colors(c1, c2)
+                parts = new_label.split(" and ")
+                t1 = parts[0].strip()
+                t2 = parts[1].strip()
+
+                c1 = base_colors.get(t1)
+                c2 = base_colors.get(t2)
+
+                if c1 and c2:
+                    color = blend_colors(c1, c2)
+                else:
+                    color = "#999999"  # Fallback if a base color is missing
             else:
-                color = base_colors.get(new_label, "#999999")
+                color = base_colors.get(new_label.strip(), "#999999")
 
             cmap[cat] = color
+            cmap[new_label] = color
 
         return labels, cmap
 
