@@ -146,20 +146,20 @@ Nepal paper OnStove/TechShares.ipynb
 
 .DS_Store
 
-!example/OnStove_notebook.ipynb
-!example/General steps after run-Copy1.ipynb
-!example/utils.py
-!example/data_templates/*
-
-onstove/tests/data/*
-!onstove/tests/data/.gitkeep
-onstove/tests/output
-example/02. OnStove_notebook for training_2.ipynb
-/example
-example/02. OnStove_notebook for training_2.ipynb
-*.ipynb
-onstove/Archive/model.py
-example/02. OnStove_notebook for training_2.ipynb
-example/02. OnStove_notebook for training_2.ipynb
-example/02. OnStove_notebook for training_2.ipynb
-example/02. OnStove_notebook for training_2.ipynb
+*example/gis_data/Administrative
+*example/gis_data/Electrification_rate
+*example/gis_data/Forest
+*example/gis_data/Friction
+*example/gis_data/LCoE
+*example/gis_data/Livestock
+*example/gis_data/MV lines
+*example/gis_data/Night time lights
+*example/gis_data/Population
+*example/gis_data/Relative Wealth Index
+*example/gis_data/Roads
+*example/gis_data/Temperature
+*example/gis_data/Traveltime
+*example/gis_data/Urban
+*example/gis_data/Water scarcity
+*example/MOZ
+*example/*.csv
