@@ -146,7 +146,6 @@ Nepal paper OnStove/TechShares.ipynb
 
 .DS_Store
 
-example/*
 !example/OnStove_notebook.ipynb
 !example/General steps after run-Copy1.ipynb
 !example/utils.py
