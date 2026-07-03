@@ -2083,7 +2083,8 @@ class OnStove(DataProcessor):
         self.gdf['value_of_time'] = norm_layer * self.specs[
             'minimum_wage'] / 30 / 8  # convert $/months to $/h (8 working hours per day)
 
-    def run(self, technologies: Union[list[str], str] = 'all', restriction: bool = True, optimization: bool = False):
+    def run(self, technologies: Union[list[str], str] = 'all', restriction: bool = True, optimization: bool = False,
+            solver: str = 'highs-ipm'):
         """Runs the model using the defined ``technologies`` as options to cook with.
 
         It loops through the ``technologies`` and calculates all costs, benefit and the net-benefit of cooking with
@@ -2173,8 +2174,8 @@ class OnStove(DataProcessor):
 
         print('Getting maximum net benefit technologies...')
         if optimization:
-            self.conditional_opt(False)
-            self.conditional_opt(True)
+            self.conditional_opt(urban=False, solver=solver)
+            self.conditional_opt(urban=True, solver=solver)
             self.prio()
         else:
             self.maximum_net_benefit(techs, restriction=restriction)
@@ -2805,7 +2806,7 @@ class OnStove(DataProcessor):
                 for value, key in codes.items():
                     writer.writerow({'KEY': key, 'VALUE': f'{key}: {value}'})
 
-    def conditional_opt(self, urban: bool = True, tol: float =0.001):
+    def conditional_opt(self, urban: bool = True, tol: float =0.001, solver='highs-ipm'):
         """Does a linear optimization with stoves given by the user`
 
         Determines where people should be adopting each stove to achieve shares given by `future_share_urban` or
@@ -2978,7 +2979,7 @@ class OnStove(DataProcessor):
 
             result = linprog(c=c_vals, A_eq=A_eq_row, b_eq=b_eq_row,
                              A_ub=A_ub, b_ub=b_ub, bounds=bounds,
-                             method='highs', options=solver_options)
+                             method=solver, options=solver_options)
 
             print("Status:", result.message)
             is_basic = ("basic" in result.message.lower())
